@@ -30,6 +30,40 @@ transport_suffixes=(
     '?prefix=RKN%20'
 )
 
+get_location_and_isp() {
+    local target=$1
+    local location
+    local isp
+
+    if [ -z "$target" ]; then
+        location=$(curl -s ipinfo.io/city)
+        isp=$(curl -s ipinfo.io/org)
+    else
+        if [[ $target =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            # If target is an IP address
+            location=$(curl -s ipinfo.io/$target/city)
+            isp=$(curl -s ipinfo.io/$target/org)
+        else
+            # If target is a domain name, resolve to IP first
+            ip=$(dig +short $target | tail -n1)
+            if [ -n "$ip" ]; then
+                location=$(curl -s ipinfo.io/$ip/city)
+                isp=$(curl -s ipinfo.io/$ip/org)
+            else
+                echo "Error: Unable to resolve domain to IP."
+                return 1
+            fi
+        fi
+    fi
+
+    if [ $? -eq 0 ]; then
+        echo "\"$location\",\"$isp\""
+        return 0
+    else
+        return 1
+    fi
+}
+
 get_average_ping() {
     local domain=$1
     local ping_count=10
@@ -70,8 +104,10 @@ test_ss_connectivity() {
 }
 
 # Prepare the CSV header
-echo "date,user-name,user-location,user-isp,hoster-name,hoster-location,hoster-ip,ping,port,ss-query,schema,url,status,message"
+echo "date,user-name,user-location,user-isp,hoster-name,hoster-ip,hoster-location,hoster-isp,ping,port,ss-query,schema,url,status,message"
 today=$(date '+%Y-%m-%d')
+my_location_and_isp=$(get_location_and_isp)
+
 
 # Iterate over each server in the JSON
 for server_info in $(echo "$json_data" | jq -r '.servers[] | @base64'); do
@@ -86,29 +122,30 @@ for server_info in $(echo "$json_data" | jq -r '.servers[] | @base64'); do
 
     ping=$(get_average_ping $server)
 
+    server_location_and_isp=$(get_location_and_isp $server)
+
     # Iterate over each transport suffix
     for transport_suffix in "${transport_suffixes[@]}"; do
         # Iterate over each URL
         for schema in "${schemas[@]}"; do
-            ss_output="$(test_ss_connectivity $method $password $server $server_port "$transport_suffix" $schema://$URL)"
-            ss_exit_status=$?
-            if [ $ss_exit_status -ne 0 ]; then
-                # try again if failed (2nd attempt)
+            attempts=3
+            ss_exit_status=1
+            for ((i=1; i<=attempts; i++)); do
                 ss_output="$(test_ss_connectivity $method $password $server $server_port "$transport_suffix" $schema://$URL)"
                 ss_exit_status=$?
-            fi
-            if [ $ss_exit_status -ne 0 ]; then
-                # try again if failed (3nd attempt)
-                ss_output="$(test_ss_connectivity $method $password $server $server_port "$transport_suffix" $schema://$URL)"
-                ss_exit_status=$?
-            fi
+                if [ $ss_exit_status -eq 0 ]; then
+                    break
+                fi
+            done
+
             if [ $ss_exit_status -ne 0 ]; then
                 status="error"
             else
                 status="ok"
             fi
 
-            echo "$today,,,,,,$server,$ping,$server_port,$transport_suffix,$schema,$URL,$status,$ss_output"
+            #    "date,user-name,user-location,user-isp,hoster-name,hoster-ip,hoster-location,hoster-isp,ping,port,ss-query,schema,url,status,message"
+            echo "$today,,$my_location_and_isp,,$server,$server_location_and_isp,$ping,$server_port,$transport_suffix,$schema,$URL,$status,$ss_output"
         done
     done
 done

@@ -1,5 +1,5 @@
 FROM golang:latest
-RUN apt update && apt install -y jq iputils-ping
+RUN apt update && apt install -y jq iputils-ping dnsutils
 RUN go install github.com/Jigsaw-Code/outline-sdk/x/examples/fetch@latest
 
 WORKDIR /app
